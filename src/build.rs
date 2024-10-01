@@ -1,5 +1,8 @@
-use log::warn;
+#![feature(async_iterator)]
+use log::{debug, warn};
 use reqwest::Client;
+use tokio_stream::Stream;
+use std::{async_iter::AsyncIterator, fmt::Debug, pin::Pin, task::{Context, Poll}};
 use serde::{de::DeserializeOwned, Deserialize};
 
 // {
@@ -24,15 +27,115 @@ use serde::{de::DeserializeOwned, Deserialize};
 //        "playback_url": "https://api.spreaker.com/v2/episodes/56245683/play.mp3"
 //      }
 
+// #[derive(Deserialize, Debug)]
+// enum SpreakerResponse<'a, T> {
+//     Success {
+//         items: Vec<Box<&'a dyn SpreakerType<'a, T>>>,
+//         next_url: String,
+//     },
+//     Error {
+//     }
+// }
+
 #[derive(Deserialize, Debug)]
-enum SpreakerResponse<T: Deserialize> {
-    Success {
-        items: Vec<T>,
-        next_url: String,
-    },
-    Error {
+struct SpreakerResponse<T> {
+    pub items: Vec<T>,
+    pub next_url: String,
+}
+
+impl<T> SpreakerResponse<T> where T: DeserializeOwned {
+    async fn request(next_url: String, cli: Client) -> Result<SpreakerResponse<T>, Box<dyn std::error::Error>> {
+        let res = cli.get(&next_url)
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        debug!("response: {:?}", res);
+
+        let res: SpreakerResponse<T> = serde_json::from_str(&res)?;
+        Ok(res)
+        // Ok(cli.get(next_url)
+        //     .send()
+        //     .await?
+        //     .json()
+        //     .await?)
+    }
+
+    fn chain_to_end(self, cli: &Client) -> SpreakerResponseIter<T> {
+        SpreakerResponseIter {
+            cli: cli.clone(),
+            current: self,
+        }
     }
 }
+
+struct SpreakerResponseIter<T> {
+    cli: Client,
+    current: SpreakerResponse<T>, 
+}
+
+impl<T> Stream for SpreakerResponseIter<T> where T: DeserializeOwned + std::marker::Sync + 'static {
+    type Item = T;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.current.items.is_empty() {
+            let fut = SpreakerResponse::<T>::request(self.current.next_url.clone(), self.cli.clone());
+            let waker = cx.waker().clone();
+            println!("spawning task");
+            tokio::spawn(async move {
+                match fut.await {
+                    Ok(next) => {
+                        println!("task completed");
+                        waker.wake();
+                    },
+                    Err(e) => {
+                        warn!("Error fetching next response: {:?}", e);
+                        waker.wake();
+                    }
+                }
+            });
+        }
+
+        todo!();
+    }
+}
+
+// impl<T> Stream for SpreakerResponseIter<T> where T: DeserializeOwned {
+//     type Item = T;
+//
+//     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+//         if self.current.items.is_empty() {
+//             self.current = match await self.current.next_response(&self.cli) {
+//                 Ok(next) => next,
+//                 Err(e) => {
+//                     warn!("Error fetching next response: {:?}", e);
+//                     return None;
+//                 }
+//             };
+//         }
+//
+//         todo!();
+//     }
+// }
+
+// impl<'a, T> AsyncIterator for SpreakerResponseIter<T> where T: DeserializeOwned {
+//     type Item = T;
+//
+//     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Option<Self::Item> {
+//         if self.current.items.is_empty() {
+//             self.current = match await self.current.next_response(&self.cli) {
+//                 Ok(next) => next,
+//                 Err(e) => {
+//                     warn!("Error fetching next response: {:?}", e);
+//                     return None;
+//                 }
+//             };
+//         }
+//
+//         todo!();
+//     }
+// }
 
 #[derive(Deserialize, Debug)]
 struct SimpleEpisode {
@@ -41,13 +144,18 @@ struct SimpleEpisode {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<(dyn std::error::Error + 'static)>> {
+    pretty_env_logger::init();
     let cli = Client::new();
     
-    let eps: Vec<SimpleEpisode> = cli.get("https://api.spreaker.com/v2/shows/3039391/episodes")
-        .send()
-        .await?
-        .json()
-        .await?;
+    let eps = SpreakerResponse::<SimpleEpisode>::request(
+        "https://api.spreaker.com/v2/shows/3039391/episodes".to_string(),
+        cli.clone(),
+    ).await?;
+    // let eps: SpreakerResponse<SimpleEpisode> = cli.get()
+    //     .send()
+    //     .await?
+    //     .json()
+    //     .await?;
 
     println!("{:?}", eps);
     Ok(())
