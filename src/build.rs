@@ -2,8 +2,9 @@
 use log::{debug, warn};
 use reqwest::Client;
 use tokio_stream::Stream;
-use std::{async_iter::AsyncIterator, fmt::Debug, pin::Pin, task::{Context, Poll}};
+use std::{async_iter::AsyncIterator, collections::VecDeque, fmt::Debug, pin::Pin, sync::{Arc, Mutex}, task::{Context, Poll}};
 use serde::{de::DeserializeOwned, Deserialize};
+use tokio_stream::StreamExt;
 
 // {
 //        "episode_id": 56245683,
@@ -28,7 +29,7 @@ use serde::{de::DeserializeOwned, Deserialize};
 //      }
 
 // #[derive(Deserialize, Debug)]
-// enum SpreakerResponse<'a, T> {
+// enum SpreakerData<'a, T> {
 //     Success {
 //         items: Vec<Box<&'a dyn SpreakerType<'a, T>>>,
 //         next_url: String,
@@ -39,12 +40,17 @@ use serde::{de::DeserializeOwned, Deserialize};
 
 #[derive(Deserialize, Debug)]
 struct SpreakerResponse<T> {
+    pub response: SpreakerData<T>,
+}
+
+#[derive(Deserialize, Debug)]
+struct SpreakerData<T> {
     pub items: Vec<T>,
     pub next_url: String,
 }
 
-impl<T> SpreakerResponse<T> where T: DeserializeOwned {
-    async fn request(next_url: String, cli: Client) -> Result<SpreakerResponse<T>, Box<dyn std::error::Error>> {
+impl<T> SpreakerData<T> where T: DeserializeOwned + Send + 'static {
+    async fn request(next_url: String, cli: Client) -> Result<SpreakerData<T>, Box<dyn std::error::Error>> {
         let res = cli.get(&next_url)
             .send()
             .await?
@@ -54,7 +60,7 @@ impl<T> SpreakerResponse<T> where T: DeserializeOwned {
         debug!("response: {:?}", res);
 
         let res: SpreakerResponse<T> = serde_json::from_str(&res)?;
-        Ok(res)
+        Ok(res.response)
         // Ok(cli.get(next_url)
         //     .send()
         //     .await?
@@ -62,46 +68,65 @@ impl<T> SpreakerResponse<T> where T: DeserializeOwned {
         //     .await?)
     }
 
-    fn chain_to_end(self, cli: &Client) -> SpreakerResponseIter<T> {
-        SpreakerResponseIter {
-            cli: cli.clone(),
-            current: self,
-        }
+    fn chain_to_end(self, cli: &Client) -> SpreakerDataIter<T> {
+        SpreakerDataIter::new(cli.clone(), self)
     }
 }
 
-struct SpreakerResponseIter<T> {
-    cli: Client,
-    current: SpreakerResponse<T>, 
+struct SpreakerDataIter<T> {
+    finished: Arc<Mutex<bool>>,
+    next_url: String,
+    items: Arc<Mutex<VecDeque<T>>>,
 }
 
-impl<T> Stream for SpreakerResponseIter<T> where T: DeserializeOwned + std::marker::Sync + 'static {
+enum SpreakerError {
+    RequestError(reqwest::Error),
+    JsonError(reqwest::Error),
+}
+
+impl<'a, T: 'static> SpreakerDataIter<T> where T: DeserializeOwned + Send {
+    fn new(cli: Client, start: SpreakerData<T>) -> Self {
+        let items = Arc::new(Mutex::new(VecDeque::from(start.items)));
+        Self {
+            items,
+            next_url: start.next_url,
+            finished: Arc::new(Mutex::new(false)),
+        }
+    }
+
+    fn start_worker(s: &Arc<Self>, cli: Client) {
+        let this = Arc::clone(s);
+        tokio::spawn(async move { this.worker(cli, this.next_url.clone()).await });
+    }
+
+    async fn worker(&self, cli: Client, next: String) -> Result<(), SpreakerError> {
+        loop {
+            let req = cli.get(&next).send().await.map_err(SpreakerError::RequestError)?;
+            let resp: SpreakerData<T> = req.json().await.map_err(SpreakerError::JsonError)?;
+            self.items.lock().unwrap().extend(resp.items);
+            let next = resp.next_url;
+            println!("next: {:?}", next);
+            if next.is_empty() {
+                break Ok(());
+            }
+        }
+    } 
+}
+
+impl<T> Stream for SpreakerDataIter<T> where T: DeserializeOwned + std::marker::Sync {
     type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.current.items.is_empty() {
-            let fut = SpreakerResponse::<T>::request(self.current.next_url.clone(), self.cli.clone());
-            let waker = cx.waker().clone();
-            println!("spawning task");
-            tokio::spawn(async move {
-                match fut.await {
-                    Ok(next) => {
-                        println!("task completed");
-                        waker.wake();
-                    },
-                    Err(e) => {
-                        warn!("Error fetching next response: {:?}", e);
-                        waker.wake();
-                    }
-                }
-            });
+        if self.items.lock().unwrap().is_empty() {
+            Poll::Pending
+        } else {
+            let mut items = self.items.lock().unwrap();
+            Poll::Ready(items.pop_front()) 
         }
-
-        todo!();
     }
 }
 
-// impl<T> Stream for SpreakerResponseIter<T> where T: DeserializeOwned {
+// impl<T> Stream for SpreakerDataIter<T> where T: DeserializeOwned {
 //     type Item = T;
 //
 //     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -119,7 +144,7 @@ impl<T> Stream for SpreakerResponseIter<T> where T: DeserializeOwned + std::mark
 //     }
 // }
 
-// impl<'a, T> AsyncIterator for SpreakerResponseIter<T> where T: DeserializeOwned {
+// impl<'a, T> AsyncIterator for SpreakerDataIter<T> where T: DeserializeOwned {
 //     type Item = T;
 //
 //     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Option<Self::Item> {
@@ -139,7 +164,8 @@ impl<T> Stream for SpreakerResponseIter<T> where T: DeserializeOwned + std::mark
 
 #[derive(Deserialize, Debug)]
 struct SimpleEpisode {
-    id: u16,
+    #[serde(rename = "episode_id")]
+    id: u32,
 }
 
 #[tokio::main]
@@ -147,16 +173,15 @@ async fn main() -> Result<(), Box<(dyn std::error::Error + 'static)>> {
     pretty_env_logger::init();
     let cli = Client::new();
     
-    let eps = SpreakerResponse::<SimpleEpisode>::request(
+    let eps = SpreakerData::<SimpleEpisode>::request(
         "https://api.spreaker.com/v2/shows/3039391/episodes".to_string(),
         cli.clone(),
     ).await?;
-    // let eps: SpreakerResponse<SimpleEpisode> = cli.get()
-    //     .send()
-    //     .await?
-    //     .json()
-    //     .await?;
+    let it = Arc::new(eps.chain_to_end(&cli));
+    SpreakerDataIter::start_worker(&it, cli.clone());
+    while let Some(ep) = it.next().await {
+        println!("{:?}", ep.id);
+    }
 
-    println!("{:?}", eps);
     Ok(())
 }
