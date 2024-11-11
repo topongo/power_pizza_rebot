@@ -1,6 +1,6 @@
 use reqwest::Client;
 use tokio_stream::Stream;
-use std::{collections::VecDeque, fmt::Debug, fs::File, future::Future, io::Cursor, path::PathBuf, pin::Pin, sync::{Arc, Mutex}, task::{Context, Poll, Waker}, time::Duration};
+use std::{collections::VecDeque, fmt::Debug, fs::{create_dir_all, File}, io::{Cursor, Write}, path::PathBuf, pin::Pin, sync::{Arc, Mutex}, task::{Context, Poll}};
 use serde::{de::DeserializeOwned, Deserialize};
 use tokio::{sync::Notify, task::JoinHandle};
 use tokio_stream::StreamExt;
@@ -174,7 +174,7 @@ impl SpreakerDownloader {
     fn download(&self, ep: SimpleEpisode) {
         let mut q = self.queue.lock().unwrap();
         q.push_back(ep);
-        info!("pushed episode to queue");
+        debug!("pushed episode to queue");
         self.wake.notify_one();
     }
 
@@ -260,9 +260,12 @@ impl SpreakerDownloader {
             return Ok(())
         }
         let mut file = File::create(output).map_err(SpreakerError::IOError)?;
-        let mut content = Cursor::new(req.bytes().await.map_err(SpreakerError::RequestError)?);
-        std::io::copy(&mut content, &mut file).map_err(SpreakerError::IOError)?;
-
+        let mut res = req.bytes_stream();
+        while let Some(v) = res.next().await {
+            let v = v.map_err(SpreakerError::RequestError)?;
+            debug!("writing chunk {}", v.len());
+            file.write(&v).map_err(SpreakerError::IOError)?;
+        }
         debug!("worker for episode {} finished", ep.id);
         Ok(())
     }
@@ -277,7 +280,7 @@ impl SpreakerDownloader {
 async fn main() -> Result<(), Box<(dyn std::error::Error + 'static)>> {
     pretty_env_logger::init();
     let cli = Arc::new(Client::new());
-    
+
     // let eps = SpreakerData::<SimpleEpisode>::request(
     //     "https://api.spreaker.com/v2/shows/3039391/episodes".to_string(),
     //     cli.clone(),
@@ -287,10 +290,16 @@ async fn main() -> Result<(), Box<(dyn std::error::Error + 'static)>> {
         "https://api.spreaker.com/v2/shows/3039391/episodes".to_owned(),
         cli.clone(),
     );
-    let mut downloader = SpreakerDownloader::new(cli, 10);
+
+    if !OUTPUT_DIR.exists() {
+        create_dir_all(OUTPUT_DIR.clone()).unwrap()
+    }
+
+    let downloader = SpreakerDownloader::new(cli, 4);
     while let Some(e) = it.next().await {
         downloader.download(e);
     }
-    downloader.join().await;
+    downloader.join().await.unwrap();
+
     Ok(())
 }
