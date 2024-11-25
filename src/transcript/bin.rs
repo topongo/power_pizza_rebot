@@ -1,5 +1,4 @@
 use std::{collections::HashSet, fs::{read_dir, read_to_string}, sync::Arc};
-
 use log::{debug, error, info, warn};
 use power_pizza_bot::{config::CONFIG, db::DB, import::import_database, spreaker::Episode, transcript::{EpisodeTranscript, JobManager, Transcript}};
 
@@ -60,14 +59,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for e in episodes {
         if !transcripts.contains(&e) {
             // info!("Transcript missing for episode {}", e);
-            if !audio_files.contains(&e) {
-                warn!("audio file missing for {}: add to download list", e);
-                to_download.push(e);
-            } else if cached_transcripts.contains(&e) {
+            if cached_transcripts.contains(&e) {
                 let t = serde_json::from_str::<Transcript>(&read_to_string(format!("{}/{}.json", CONFIG.import.transcript_dir, e)).unwrap()).unwrap();
+                info!("transcript cache found for {}: add to convert list", e);
                 to_convert.push((e, t));
+            } else if !audio_files.contains(&e) {
+                warn!("transcript cache and audio file missing for {}: add to download list", e);
+                to_download.push(e);
             } else {
-                debug!("no cached transcript found for {}: add to transcript list", e);
+                debug!("audio file found but no cached transcript found for {}: add to transcript list", e);
                 to_transcribe.push(e);
             }
         }
