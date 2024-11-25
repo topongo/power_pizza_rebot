@@ -1,25 +1,20 @@
 use reqwest::Client;
-use tokio_stream::Stream;
-use std::{collections::VecDeque, fmt::Debug, fs::{create_dir_all, File}, io::{Cursor, Write}, path::PathBuf, pin::Pin, sync::{Arc, Mutex}, task::{Context, Poll}};
-use serde::{de::DeserializeOwned, Deserialize};
+use std::{collections::VecDeque, fs::File, io::Write, path::PathBuf, sync::{Arc, Mutex}};
 use tokio::{sync::Notify, task::JoinHandle};
 use tokio_stream::StreamExt;
 #[allow(unused_imports)]
 use log::{info,warn,debug,error,trace};
-use lazy_static::lazy_static;
 
 use super::{error::SpreakerError, simple_episode::SimpleEpisode};
 
 pub struct SpreakerDownloader {
-    cli: Arc<Client>,
     queue: Arc<Mutex<VecDeque<SimpleEpisode>>>,
-    jobs: usize,
-    workers: Arc<Mutex<Vec<JoinHandle<Result<(), SpreakerError>>>>>,
     manager: JoinHandle<Result<(), SpreakerError>>,
     waiting: Arc<Mutex<bool>>,
     wake: Arc<Notify>,
-    output: PathBuf,
 }
+
+type Worker = JoinHandle<Result<(), SpreakerError>>;
 
 impl SpreakerDownloader {
     pub fn new(cli: Arc<Client>, jobs: usize, output: PathBuf) -> Self {
@@ -37,14 +32,10 @@ impl SpreakerDownloader {
             output.clone(),
         ));
         Self {
-            cli,
-            jobs,
             waiting,
             queue,
-            workers,
             manager,
             wake,
-            output,
         }
     }
 
@@ -57,7 +48,7 @@ impl SpreakerDownloader {
 
     async fn _manager(
         cli: Arc<Client>,
-        workers: Arc<Mutex<Vec<JoinHandle<Result<(), SpreakerError>>>>>,
+        workers: Arc<Mutex<Vec<Worker>>>,
         queue: Arc<Mutex<VecDeque<SimpleEpisode>>>,
         jobs: usize,
         wake: Arc<Notify>,
@@ -67,7 +58,7 @@ impl SpreakerDownloader {
         let notify = Arc::new(Notify::new());
         let output = Arc::new(output);
         loop {
-            while true {
+            loop {
                 let nw = workers.lock().unwrap().len();
                 debug!("wokers now: {}", nw);
                 if nw >= jobs {

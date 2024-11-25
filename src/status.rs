@@ -1,10 +1,6 @@
-use std::sync::Mutex;
 use chrono::{DateTime, Utc};
-use lazy_static::lazy_static;
 use mongodb::{bson::doc, Database};
 use serde::{Serialize, Deserialize};
-
-use crate::db::DB;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Status {

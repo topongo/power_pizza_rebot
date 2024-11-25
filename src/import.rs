@@ -1,4 +1,5 @@
-use std::{collections::HashSet, sync::{Arc, Mutex}, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
+use tokio::sync::Mutex;
 #[allow(unused_imports)]
 use log::{info,debug,warn,error};
 use crate::db::DB;
@@ -56,7 +57,7 @@ pub async fn import_database(show: String) -> Result<(), Box<dyn std::error::Err
                 let h = tokio::spawn(async move {
                     info!("fetching episode {}", e.id);
                     let e = e.get_episode().await.unwrap();
-                    eps.lock().unwrap().push(e);
+                    eps.lock().await.push(e);
                 });
                 handles.push(h);
                 if handles.len() >= 10 {
@@ -75,9 +76,9 @@ pub async fn import_database(show: String) -> Result<(), Box<dyn std::error::Err
                 h.await?;
             }
 
-            if !eps.lock().unwrap().is_empty() {
+            if !eps.lock().await.is_empty() {
                 DB
-                    .insert_stateful::<Episode>(&eps.lock().unwrap())            
+                    .insert_stateful::<Episode>(&eps.lock().await)            
                     .await?;
             }
         }

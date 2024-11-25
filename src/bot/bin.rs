@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{fmt::Display, time::Instant};
 
 use log::{debug, error, info, trace};
 use regex::Regex;
@@ -56,11 +56,27 @@ impl Command {
     }
 }
 
+impl Display for Command {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Command::Help => write!(f, "help"),
+            Command::Search(q) => write!(f, "search {}", q),
+            Command::SearchAdvanced(q) => write!(f, "searchAdvanced {}", q),
+            Command::SearchAdvancedEpisode(q) => write!(f, "searchAdvancedEpisode {}", q),
+            Command::Beta => write!(f, "beta"),
+            Command::BetaList => write!(f, "betaList"),
+            Command::BetaWaitList => write!(f, "betaWaitList"),
+            Command::BetaAccept(q) => write!(f, "betaAccept {}", q),
+        }
+    }
+}
+
 async fn reply(bot: Bot, msg: Message, cmd: Command) -> Result<(), teloxide::RequestError> {
-    match reply_inner(&bot, &msg, cmd).await {
-        Ok(_) => info!("successfully replied to message {} from {}", msg.id, represent_user(&msg.from)),
+    info!("replying to command `{}` (id {}) from {}", cmd, msg.id, represent_user(&msg.from));
+    match reply_inner(&bot, &msg, cmd.clone()).await {
+        Ok(_) => info!("successfully replied to {} from {}", msg.id, represent_user(&msg.from)),
         Err(e) => {
-            error!("Failed to reply to message {} from {:?}: {:?}", msg.id, represent_user(&msg.from), e);
+            error!("failed to reply to message {} from {}: {:?}", msg.id, represent_user(&msg.from), e);
             bot.send_message(msg.chat.id, e.respond_client()).await?;
         }
     }

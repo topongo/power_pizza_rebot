@@ -1,7 +1,5 @@
 use serde::Deserialize;
 
-use crate::spreaker::SpreakerResponse;
-
 use super::{ProtoEpisode, SpreakerError, API_URL};
 use super::episode::{Episode, EpisodeResponse};
 

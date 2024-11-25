@@ -1,6 +1,5 @@
-use std::{cmp::{max, min}, collections::VecDeque, sync::Mutex, time::{Duration, Instant}};
-
-use chrono::{offset, DateTime, Local};
+use tokio::sync::Mutex;
+use chrono::{DateTime, Local};
 use lazy_static::lazy_static;
 #[allow(unused_imports)]
 use log::{debug, info, trace};
@@ -20,15 +19,17 @@ pub trait PPPData: Serialize + DeserializeOwned + std::marker::Send + std::marke
     type IdType: DeserializeOwned + std::fmt::Display + std::marker::Send + std::marker::Sync;
 }
 
-impl PPPDatabase {
-    pub fn new() -> Self {
+impl Default for PPPDatabase {
+    fn default() -> Self {
         let db = get_client().expect("Failed to connect to MongoDB");
         Self {
             db,
             status: Mutex::new(None),
         }
     }
+}
 
+impl PPPDatabase {
     pub async fn ensure_index(&self) -> Result<(), mongodb::error::Error> {
         self.db
             .collection::<()>("transcripts")
@@ -55,23 +56,23 @@ impl PPPDatabase {
     }
 
     pub async fn _ensure_status(&self) {
-        if self.status.lock().unwrap().is_none() {
-            *self.status.lock().unwrap() = Status::from_db(&self.db).await.expect("Failed to get status from db");
+        if self.status.lock().await.is_none() {
+            *self.status.lock().await = Status::from_db(&self.db).await.expect("Failed to get status from db");
         }
     }
 
     pub async fn _update_status(&self) {
-        if self.status.lock().unwrap().is_none() {
-            *self.status.lock().unwrap() = Some(Status::default());
+        if self.status.lock().await.is_none() {
+            *self.status.lock().await = Some(Status::default());
             self.db
                 .collection::<Status>("status")
-                .insert_one(self.status.lock().unwrap().as_ref().unwrap())
+                .insert_one(self.status.lock().await.as_ref().unwrap())
                 .await
                 .expect("Failed to update status in db");
         } else {
             self.db
                 .collection::<Status>("status")
-                .replace_one(doc!{}, self.status.lock().unwrap().as_ref().unwrap())
+                .replace_one(doc!{}, self.status.lock().await.as_ref().unwrap())
                 .await
                 .expect("Failed to update status in db");
         }
@@ -79,7 +80,7 @@ impl PPPDatabase {
 
     pub async fn last_modified(&self) -> Option<DateTime<Local>> {
         self._ensure_status().await;
-        self.status.lock().unwrap().as_ref().map(|s| s.last_update.clone().with_timezone(&Local))
+        self.status.lock().await.as_ref().map(|s| s.last_update.clone().with_timezone(&Local))
     }
 
     pub async fn get_ids<T>(&self) -> Result<Vec<u32>, mongodb::error::Error> where T: PPPData {
@@ -159,5 +160,5 @@ fn get_client() -> Result<Database , Box<dyn std::error::Error>> {
 }
 
 lazy_static! {
-    pub static ref DB: PPPDatabase = PPPDatabase::new();
+    pub static ref DB: PPPDatabase = PPPDatabase::default();
 }

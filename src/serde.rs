@@ -1,5 +1,5 @@
 pub(crate) mod naive_datetime {
-    use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+    use chrono::{DateTime, Utc};
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(date: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error>
