@@ -40,6 +40,11 @@ pub static WELCOME_STRING: &str = concat!(
     "Ciao! Sono il bot di PPP, posso aiutarti a trovare le puntate in cui si parla di un argomento specifico.",
 );
 
+/// Note: the footer string must be **markdown** formatted!
+pub static FOOTER_STRING: &str = concat!(
+    "Questo bot è sviluppato da @topongo ed è open\\-source\\! [topongo/ppp\\-bot](https://github.com/topongo/ppp\\-bot)",
+);
+
 
 lazy_static!{
         // (':', '.', '(', ')', '-', '!'].iter().cloned().collect();
@@ -52,7 +57,7 @@ lazy_static!{
         ('!', "\\!"),
     ].iter().cloned().collect();
     pub static ref HELP_MESSAGE: String = format!(
-        "{}\n\n{}",
+        "{}\n\n{}\n\n{}",
         markdown::escape(WELCOME_STRING),
         [DESC_COMMAND_SEARCH, DESC_COMMAND_SEARCH_ADVANCED, DESC_COMMAND_SEARCH_ADVANCED_EPISODE]
             .iter()
@@ -63,5 +68,6 @@ lazy_static!{
             )
             .collect::<Vec<String>>()
             .join("\n\n"),
+        FOOTER_STRING,
     );
 }
