@@ -39,7 +39,7 @@ impl BotUser {
     pub fn identify(&self) -> String {
         match self.username {
             Some(ref u) => format!("@{} ({})", u, self.id),
-            None => self.first_name.clone(),
+            None => format!("{} ({})", self.first_name, self.id),
         }
     }
 }
