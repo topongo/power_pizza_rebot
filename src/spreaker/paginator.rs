@@ -3,7 +3,7 @@ use std::{collections::VecDeque, pin::Pin, sync::{Arc, Mutex}, task::{Context, P
 #[allow(unused_imports)]
 use log::{info,debug,warn,error};
 use reqwest::Client;
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::de::DeserializeOwned;
 use tokio::task::JoinHandle;
 use tokio_stream::Stream;
 use super::{error::SpreakerError, SpreakerResponse};
@@ -11,20 +11,18 @@ use super::{error::SpreakerError, SpreakerResponse};
 
 pub struct SpreakerDataIter<T> {
     cli: Arc<Client>,
-    finished: Arc<Mutex<bool>>,
     next_url: String,
     items: Arc<Mutex<VecDeque<T>>>,
     future: Option<JoinHandle<Result<(), SpreakerError>>>,
 }
 
-impl<'a, T: 'static> SpreakerDataIter<T> where T: DeserializeOwned + Send {
+impl<T: 'static> SpreakerDataIter<T> where T: DeserializeOwned + Send {
     pub(crate) fn new(cli: Arc<Client>, next_url: String) -> Self {
         let items = Arc::new(Mutex::new(VecDeque::from(vec![])));
         Self {
             cli,
             items,
             next_url,
-            finished: Arc::new(Mutex::new(false)),
             future: None,
         }
     }

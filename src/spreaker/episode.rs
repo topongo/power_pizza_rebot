@@ -1,7 +1,7 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Deserializer, Serialize};
+use chrono::{DateTime, NaiveDateTime, Utc};
+use serde::{Deserialize, Serialize};
 
-use crate::db::{PPPData, PPPDatabase};
+use crate::db::PPPData;
 
 use super::SimpleEpisode;
 
@@ -18,6 +18,36 @@ pub struct Episode {
     pub download_url: String,
     pub description: String,
     pub description_html: String,
+}
+
+#[derive(Deserialize)]
+pub struct ProtoEpisode {
+    pub episode_id: u32,
+    pub title: String,
+    pub duration: u32,
+    pub show_id: u32,
+    pub author_id: u32,
+    pub published_at: String,
+    pub download_url: String,
+    pub description: String,
+    pub description_html: String,
+}
+
+impl From<ProtoEpisode> for Episode {
+    fn from(p: ProtoEpisode) -> Self {
+        let date = NaiveDateTime::parse_from_str(p.published_at.as_str(), "%Y-%m-%d %H:%M:%S").unwrap();
+        Self {
+            id: p.episode_id,
+            title: p.title,
+            duration: p.duration,
+            show_id: p.show_id,
+            author_id: p.author_id,
+            published_at: date.and_utc(),
+            download_url: p.download_url,
+            description: p.description,
+            description_html: p.description_html,
+        }
+    }
 }
 
 impl PPPData for Episode {
@@ -37,9 +67,9 @@ struct EpisodeEpisode<T> {
     episode: T,
 }
 
-impl EpisodeResponse<Episode> {
+impl EpisodeResponse<ProtoEpisode> {
     pub fn into_inner(self ) -> Episode {
-        self.response.episode
+        self.response.episode.into()
     }
 }
 

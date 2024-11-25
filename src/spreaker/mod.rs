@@ -6,7 +6,7 @@ mod paginator;
 
 pub use error::SpreakerError;
 pub use downloader::SpreakerDownloader;
-pub use episode::Episode;
+pub use episode::{ProtoEpisode, Episode};
 pub use simple_episode::SimpleEpisode;
 
 use std::sync::Arc;

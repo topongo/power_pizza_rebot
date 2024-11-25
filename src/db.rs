@@ -1,21 +1,20 @@
-use std::{cmp::{max, min}, collections::{HashMap, VecDeque}, sync::{Arc, Mutex}, time::Duration};
+use std::{cmp::{max, min}, collections::VecDeque, sync::Mutex, time::{Duration, Instant}};
 
-use chrono::{DateTime, Local, NaiveDateTime};
-use futures_util::lock::MutexGuard;
+use chrono::{offset, DateTime, Local};
 use lazy_static::lazy_static;
-use log::{debug, info};
-use mongodb::{bson::{doc, from_document, Document}, options::{ClientOptions, Credential, IndexOptions, ServerAddress}, results::CreateIndexResult, Client, Database, IndexModel, SearchIndexModel};
+#[allow(unused_imports)]
+use log::{debug, info, trace};
+use mongodb::{bson::{doc, from_document, Bson}, options::{ClientOptions, Credential, IndexOptions, ServerAddress}, results::CreateIndexResult, Client, Database, IndexModel};
 use futures_util::stream::{StreamExt, TryStreamExt};
-use futures_util::FutureExt;
-use regex::{Regex, RegexBuilder};
+use regex::RegexBuilder;
 use serde::{de::DeserializeOwned, Serialize};
 use substring::Substring;
 use unidecode::unidecode;
 
-use crate::{spreaker::Episode, status::Status, transcript::EpisodeTranscript};
+use crate::{config::CONFIG, spreaker::Episode, status::Status, transcript::{EpisodeTranscript, FromTo, Timestamp}};
 
 pub struct PPPDatabase {
-    db: Database,
+    pub(crate) db: Database,
     status: Mutex<Option<Status>>,
 }
 
@@ -34,14 +33,29 @@ impl PPPDatabase {
         }
     }
 
-    pub async fn ensure_index(&self) -> Result<CreateIndexResult, mongodb::error::Error> {
+    pub async fn ensure_index(&self) -> Result<(), mongodb::error::Error> {
         self.db
             .collection::<()>("transcripts")
             .create_index(IndexModel::builder()
             .keys(doc!{"data": "text"})
             .options(IndexOptions::builder().default_language("italian".to_owned()).build())
             .build()
-        ).await
+        ).await?;
+        self.db
+            .collection::<()>("episodes")
+            .create_index(IndexModel::builder()
+                .keys(doc!{"id": 1})
+                .options(IndexOptions::builder().unique(true).build())
+                .build()
+        ).await?;
+        self.db
+            .collection::<()>("users")
+            .create_index(IndexModel::builder()
+                .keys(doc!{"id": 1})
+                .options(IndexOptions::builder().unique(true).build())
+                .build()
+        ).await?;
+        Ok(())
     }
 
     pub async fn _ensure_status(&self) {
@@ -112,119 +126,28 @@ impl PPPDatabase {
         Ok(())
     }
 
-    pub async fn search_text(&self, text: String) -> Result<Vec<SearchResult>, mongodb::error::Error> {
+    pub async fn update_one_stateless<T>(&self, id: T::IdType, data: T) -> Result<(), mongodb::error::Error> where T: PPPData, <T as PPPData>::IdType: Into<Bson> {
         self._ensure_status().await;
-        let episodes = self.db
-            .collection::<EpisodeTranscript>("transcripts")
-            .aggregate(vec![
-                doc!{"$match": {"$text": {"$search": text}}},
-                doc!{"$project": {"episode_id": 1, "_id": 0}},
-                doc!{"$sort": {"sort": {"$meta": "textScore"}}},
-                doc!{"$lookup": {"from": "episodes", "localField": "episode_id", "foreignField": "id", "as": "episodeDetails"}},
-                doc!{"$unwind": "$episodeDetails"},
-                doc!{"$replaceRoot": {"newRoot": "$episodeDetails"}},
-            ])
-            .await?
-            .map(|d| d.map(|d| from_document::<Episode>(d.clone()).unwrap()))
-            .try_collect::<Vec<Episode>>()
+        self.db
+            .collection::<T>(T::COLLECTION)
+            .replace_one(doc!{T::ID_KEY: id}, data)
+            .upsert(true)
             .await?;
-
-        Ok(episodes.into_iter().map(|episode| SearchResult { episode }).collect())
+        Ok(())
     }
-    
-    pub async fn search_transcript_offset(&self, id: u32, text: String) -> Result<Option<OffsetSearchResult>, mongodb::error::Error> {
+
+    pub async fn update_one_stateful<T>(&self, id: T::IdType, data: T) -> Result<(), mongodb::error::Error> where T: PPPData, <T as PPPData>::IdType: Into<Bson> {
         self._ensure_status().await;
-        let transcript = match self.db
-            .collection::<EpisodeTranscript>("transcripts")
-            .find_one(doc!{"episode_id": id})
-            .await? {
-                Some(t) => t,
-                None => return Ok(None),
-            };
-
-        const HINT_RADIUS: usize = 50;
-
-        let r = RegexBuilder::new(&text)
-            .case_insensitive(true)
-            .build()
-            .expect("Failed to build regex");
-        
-        let data = unidecode(&transcript.data);
-        let mut matches = VecDeque::new();
-        for pos in r.find_iter(&data) {
-            let pos=  pos.start();
-            matches.push_back((pos, data.substring(max(0, pos - HINT_RADIUS / 2), min(transcript.data.len(), pos + text.len() + HINT_RADIUS / 2)).to_string()));
-        }
-        Ok(Some(OffsetSearchResult::from(matches, transcript.timestamps)))
-    }
+        self.update_one_stateless(id, data).await?;
+        self._update_status().await;
+        Ok(())
+    } 
 }
-
-#[derive(Debug)]
-pub struct SearchResult {
-    pub episode: Episode,
-}
-
-pub struct OffsetSearchResult {
-    pub matches: Vec<EpisodeOffsetMatch>,
-}
-
-impl OffsetSearchResult {
-    pub fn from(mut matches: VecDeque<(usize, String)>, timestamps: Vec<(Duration, usize)>) -> Self {
-        let mut curr = match matches.pop_front() {
-            Some(m) => m,
-            None => return Self { matches: vec![] },
-        };
-        let mut out = vec![];
-        let mut prev = 0;
-        let mut prev_time = Duration::from_secs(0);
-        for (time, offset) in timestamps {
-            if curr.0 > prev && curr.0 < offset {
-                out.push(EpisodeOffsetMatch {
-                    time: time,
-                    hint: curr.1,
-                });
-                curr = match matches.pop_front() {
-                    Some(m) => m,
-                    None => break,
-                };
-            }
-            prev = offset;
-            prev_time = time;
-        }
-        Self {
-            matches: out,
-        }
-    }
-}
-
-pub struct EpisodeOffsetMatch {
-    pub time: Duration,
-    pub hint: String,
-}
-
-/// # Queries:
-/// Get audio timestamp from text offset
-/// db.transcripts.aggregate([{$match: {episode_id: 56245683}}, {$project: {index: {$indexOfCP: ["$data", "Undertale"]}, timestamps: 1}}, {$unwind: "$timestamps"}, {$match: {"timestamps.1": {$lte: 52434}}}, {$sort: {"timestamps.1": -1}}, {$limit: 1}])
-///
-/// Get episode id from search string
-/// db.transcripts.aggregate([{ $match: {$text: {$search: "undertale"} }}, {$project: {episode_id: 1, _id: 0}}, {$lookup: {from: "episodes", localField: "episode_id", foreignField: "id", as: "episodeDetails"}}, {$project: {name: "$episodeDetails.title", id: "$episode_id"}}])
 
 fn get_client() -> Result<Database , Box<dyn std::error::Error>> {
-    let options = ClientOptions::builder()
-        .hosts(vec![
-            ServerAddress::Tcp {
-                host: std::env::var("PPP_MONGO_HOST").unwrap_or("localhost".to_owned()),
-                port: Some(std::env::var("PPP_MONGO_PORT").unwrap_or("27017".to_owned()).parse()?),
-            },
-        ])
-        .credential(Credential::builder()
-            .username(std::env::var("PPP_MONGO_USER").unwrap_or("ppp".to_owned()))
-            .password(std::env::var("PPP_MONGO_PASSWORD")?)
-            .build()
-        )
-        .build();
+    let cli = CONFIG.db.client();
 
-    Ok(Client::with_options(options)?.database("ppp"))
+    Ok(cli.database("ppp"))
 }
 
 lazy_static! {

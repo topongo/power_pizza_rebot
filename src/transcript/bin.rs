@@ -1,13 +1,19 @@
 use std::{collections::HashSet, fs::{read_dir, read_to_string}, sync::Arc};
 
-use log::{info, warn};
-use power_pizza_bot::{db::DB, import::import_database, spreaker::Episode, transcript::{EpisodeTranscript, JobManager, Transcript}};
+use log::{info, warn, error};
+use power_pizza_bot::{config::CONFIG, db::DB, import::import_database, spreaker::Episode, transcript::{EpisodeTranscript, JobManager, Transcript}};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     pretty_env_logger::init();
 
-    import_database("3039391".to_owned()).await?;
+    info!("check for missing directories");
+    if !CONFIG.import.check_dirs() {
+        error!("missing directories");
+        return Ok(());
+    }
+
+    import_database(CONFIG.import.show_id.to_string()).await?;
 
     // check for missing transcripts
     let episodes = DB.get_ids::<Episode>().await.unwrap();
@@ -33,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
 
-    let audio_files: HashSet<u32> = read_dir("audio/wav")
+    let audio_files: HashSet<u32> = read_dir(CONFIG.import.wav_dir.clone())
         .unwrap()
         .filter_map(|entry| {
             let entry = entry.unwrap();
@@ -58,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 warn!("audio file missing for {}: add to download list", e);
                 to_download.push(e);
             } else if cached_transcripts.contains(&e) {
-                let t = serde_json::from_str::<Transcript>(&read_to_string(format!("output/{}.json", e)).unwrap()).unwrap();
+                let t = serde_json::from_str::<Transcript>(&read_to_string(format!("{}/{}.json", CONFIG.import.transcript_dir, e)).unwrap()).unwrap();
                 to_convert.push((e, t));
             } else {
                 info!("no cached transcript found for {}: add to transcript list", e);

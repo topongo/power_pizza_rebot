@@ -20,6 +20,7 @@ serde_with = "3.11.0"
 regex = "1.11.1"
 unidecode = "0.3.0"
 substring = "1.4.5"
+toml = "0.8.19"
 
 [[bin]]
 name = "ppp_download"
@@ -27,9 +28,9 @@ path = "src/download.rs"
 
 [[bin]]
 name = "ppp_bot"
-path = "src/bot.rs"
+path = "src/bot/bin.rs"
 
 [[bin]]
-name = "ppp_transcript"
+name = "ppp_import"
 path = "src/transcript/bin.rs"
 

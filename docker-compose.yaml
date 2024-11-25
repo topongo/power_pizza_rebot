@@ -1,0 +1,29 @@
+services:
+  transcribe:
+    build: .
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - ./audio:/app/input
+      - ./models_ext:/app/models_ext
+      - ./output:/app/output
+
+  db:
+    image: mongo
+    volumes:
+      - mongodb_data:/data/db
+    ports:
+      - 27017:27017
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ppp
+      MONGO_INITDB_ROOT_PASSWORD: ${PPP_DB_PASSWORD:?}
+
+volumes:
+  mongodb_data:
+      
+

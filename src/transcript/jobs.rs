@@ -1,10 +1,13 @@
 use std::io::Write;
 use std::fmt::Display;
 use std::sync::{Arc, Mutex};
+use log::debug;
+#[allow(unused_imports)]
 use log::{error, info, warn};
 use futures_util::stream::StreamExt;
 
-use crate::db::{DB, PPPData};
+use crate::config::CONFIG;
+use crate::db::DB;
 use crate::spreaker::Episode;
 use crate::transcript::data::TranscriptAlt;
 use tokio::sync::Semaphore;
@@ -38,18 +41,21 @@ impl JobManager {
     }
 
     pub fn run_convert(&self, id: u32, transcript: Transcript) {
+        debug!("enqueuing convert job for episode {}", id);
         let conv = Self::_run_convert(id, transcript, self.conv_sem.clone());
         let handle = tokio::spawn(conv);
         self.conv_jobs.lock().unwrap().push(handle);
     }
 
     pub fn run_transcribe(&self, id: u32) {
+        debug!("enqueuing transcribe job for episode {}", id);
         let tran = Self::_run_transcribe(id, self.cli.clone(), self.tran_sem.clone());
         let handle = tokio::spawn(tran);
         self.tran_jobs.lock().unwrap().push(handle);
     }
 
     pub fn run_download(&self, id: u32) {
+        debug!("enqueuing download job for episode {}", id);
         let down = Self::_run_download(id, self.cli.clone(), self.down_sem.clone());
         let handle = tokio::spawn(down);
         self.down_jobs.lock().unwrap().push(handle);
@@ -57,6 +63,7 @@ impl JobManager {
 
     async fn _run_convert(id: u32, transcript: Transcript, sem: Arc<Semaphore>) -> Result<EpisodeTranscript, JobManagerError> {
         let _permit = sem.acquire().await.unwrap();
+        info!("converting episode {}", id);
         let transcript = (id, transcript).into();
         drop(_permit);
         Ok(transcript)
@@ -64,25 +71,31 @@ impl JobManager {
 
     async fn _run_transcribe(id: u32, cli: Arc<reqwest::Client>, sem: Arc<Semaphore>) -> Result<(u32, Transcript), JobManagerError> {
         let _permit = sem.acquire().await.unwrap();
-        let f = format!("./audio/wav/{}.wav", id);
+        let f = format!("{}/{}.wav", CONFIG.import.wav_dir, id);
         // warn!("using file: {}", f);
         info!("transcribing espisode {}", id);
-        let t = cli
-            .post("http://127.0.0.1:8080/inference")
-            .multipart(reqwest::multipart::Form::new()
-                .text("temperature", "0.0")
-                .text("temperature_inc", "0.0")
-                .text("response_format", "verbose_json")
-                .file("file", f).await?
-            )
-        // info!("sending request for episode {}: {:?}", id, req);
-        // let t = req
-            .send()
-            .await.unwrap()
-            .json::<TranscriptAlt>()
-            .await.unwrap();
+        let t = loop {
+            match cli
+                .post("http://127.0.0.1:8080/inference")
+                .multipart(reqwest::multipart::Form::new()
+                    .text("temperature", "0.0")
+                    .text("temperature_inc", "0.0")
+                    .text("response_format", "verbose_json")
+                    .file("file", &f).await?
+                )
+            // info!("sending request for episode {}: {:?}", id, req);
+            // let t = req
+                .send()
+                .await {
+                Ok(t) => break t.json::<TranscriptAlt>().await?,
+                Err(e) => {
+                    error!("error sending out request, retrying in 5 seconds: {}", e);
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            }
+        };
         let t: Transcript = t.into();
-        let cache = std::fs::File::create(format!("output/{}.json", id))?;
+        let cache = std::fs::File::create(format!("{}/{}.json", CONFIG.import.transcript_dir, id))?;
         serde_json::to_writer(cache, &t)?;
         drop(_permit);
         Ok((id, t))
@@ -90,11 +103,12 @@ impl JobManager {
     
     async fn _run_download(id: u32, cli: Arc<reqwest::Client>, sem: Arc<Semaphore>) -> Result<u32, JobManagerError> {
         let _permit = sem.acquire().await.unwrap();
+        info!("downloading episode {}", id);
         let e = DB.get::<Episode>(id).await?.unwrap();
         let url = e.download_url;
         let res = cli.get(&url).send().await?;
-        let mp3 = format!("./audio/mp3/{}.mp3", e.id);
-        let wav = format!("./audio/wav/{}.wav", e.id);
+        let mp3 = format!("{}/{}.mp3", CONFIG.import.download_dir, e.id);
+        let wav = format!("{}/{}.wav", CONFIG.import.wav_dir, e.id);
         if res.status().is_success() {
             let mut file = std::fs::File::create(&mp3)?;
             let mut stream =  res.bytes_stream();

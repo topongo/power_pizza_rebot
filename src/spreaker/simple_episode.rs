@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 use crate::spreaker::SpreakerResponse;
 
-use super::{SpreakerError, API_URL};
+use super::{ProtoEpisode, SpreakerError, API_URL};
 use super::episode::{Episode, EpisodeResponse};
 
 #[derive(Deserialize, Debug)]
@@ -23,7 +23,7 @@ impl SimpleEpisode {
     }
 
     pub async fn get_episode(&self) -> Result<Episode, SpreakerError> {
-        let resp = reqwest::get(format!("{}/episodes/{}", API_URL, self.id)).await?.json::<EpisodeResponse<Episode>>().await?;
+        let resp = reqwest::get(format!("{}/episodes/{}", API_URL, self.id)).await?.json::<EpisodeResponse<ProtoEpisode>>().await?;
         Ok(resp.into_inner())
     }
 }

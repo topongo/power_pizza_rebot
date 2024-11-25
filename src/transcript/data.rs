@@ -34,7 +34,7 @@ pub struct SegmentAlt {
 }
 
 #[serde_as]
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct FromTo {
     #[serde_as(as = "DurationMilliSeconds<u64>")]
     pub from: Duration,
@@ -43,10 +43,16 @@ pub struct FromTo {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
+pub struct Timestamp {
+    pub time: FromTo,
+    pub offsets: (usize, usize),
+}
+
+#[derive(Deserialize, Serialize, Debug)]
 pub struct EpisodeTranscript {
     pub episode_id: u32,
     pub data: String,
-    pub timestamps: Vec<(Duration, usize)>,
+    pub timestamps: Vec<Timestamp>,
 }
 
 impl PPPData for EpisodeTranscript {
@@ -61,13 +67,18 @@ impl From<(u32, Transcript)> for EpisodeTranscript {
         let Transcript { transcription } = transcript;
 
         let size = transcription.iter().map(|t| t.text.len() + 1).sum::<usize>();
-        let mut timestamps: Vec<(Duration, usize)> = Vec::with_capacity(transcription.len());
+        let mut timestamps: Vec<Timestamp> = Vec::with_capacity(transcription.len());
         let mut data = String::with_capacity(size);
+        let mut len = 0;
         for segment in transcription {
             let Segment { timestamps: ts, text: t } = segment;
-            let FromTo { from, .. } = ts;
-            timestamps.push((from, data.len()));
+            let sl = t.chars().count();
             data.push_str(&t);
+            timestamps.push(Timestamp {
+                time: ts,
+                offsets: (len, len + sl),
+            });
+            len += sl;
         }
         Self {
             episode_id,
