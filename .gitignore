@@ -1,1 +1,7 @@
 /target
+.env
+Cargo.lock
+audio
+output
+transcripts
+config*toml

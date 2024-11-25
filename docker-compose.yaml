@@ -1,6 +1,6 @@
 services:
   transcribe:
-    build: .
+    build: ./whisper.cpp
     deploy:
       resources:
         reservations:
@@ -22,6 +22,24 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: ppp
       MONGO_INITDB_ROOT_PASSWORD: ${PPP_DB_PASSWORD:?}
+
+  bot:
+    build: .
+    command: ppp_bot
+    volumes:
+      - ./config.docker.toml:/app/config.toml
+    environment:
+      RUST_LOG: ${PPP_BOT_LOG:-info}
+
+  import:
+    build: .
+    environment:
+      RUST_LOG: ${PPP_IMPORT_LOG:-info}
+    command: ppp_import
+    volumes:
+      - ./audio:/app/audio/
+      - ./transcripts:/app/transcripts
+      - ./config.docker.toml:/app/config.toml
 
 volumes:
   mongodb_data:
