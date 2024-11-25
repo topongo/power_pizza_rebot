@@ -53,7 +53,7 @@ impl From<ProtoEpisode> for Episode {
 impl PPPData for Episode {
     const COLLECTION: &'static str = "episodes";
     const ID_KEY: &'static str = "id";
-    type IdType = Episode;
+    type IdType = u32;
 }
 
 

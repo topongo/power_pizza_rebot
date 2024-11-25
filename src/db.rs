@@ -4,14 +4,10 @@ use chrono::{offset, DateTime, Local};
 use lazy_static::lazy_static;
 #[allow(unused_imports)]
 use log::{debug, info, trace};
-use mongodb::{bson::{doc, from_document, Bson}, options::{ClientOptions, Credential, IndexOptions, ServerAddress}, results::CreateIndexResult, Client, Database, IndexModel};
+use mongodb::{bson::{doc, Bson}, options::IndexOptions, Database, IndexModel};
 use futures_util::stream::{StreamExt, TryStreamExt};
-use regex::RegexBuilder;
 use serde::{de::DeserializeOwned, Serialize};
-use substring::Substring;
-use unidecode::unidecode;
-
-use crate::{config::CONFIG, spreaker::Episode, status::Status, transcript::{EpisodeTranscript, FromTo, Timestamp}};
+use crate::{config::CONFIG, status::Status};
 
 pub struct PPPDatabase {
     pub(crate) db: Database,
@@ -21,7 +17,7 @@ pub struct PPPDatabase {
 pub trait PPPData: Serialize + DeserializeOwned + std::marker::Send + std::marker::Sync {
     const COLLECTION: &'static str;
     const ID_KEY: &'static str;
-    type IdType: DeserializeOwned + std::marker::Send + std::marker::Sync;
+    type IdType: DeserializeOwned + std::fmt::Display + std::marker::Send + std::marker::Sync;
 }
 
 impl PPPDatabase {
@@ -101,7 +97,7 @@ impl PPPDatabase {
             .map_err(mongodb::error::Error::custom)
     }
 
-    pub async fn get<T>(&self, id: u32) -> Result<Option<T>, mongodb::error::Error> where T: PPPData {
+    pub async fn get<T>(&self, id: T::IdType) -> Result<Option<T>, mongodb::error::Error> where T: PPPData, <T as PPPData>::IdType: Into<Bson> {
         debug!("get {} from collection {} from db", id, T::COLLECTION);
         self._ensure_status().await;
         self.db
@@ -142,6 +138,18 @@ impl PPPDatabase {
         self._update_status().await;
         Ok(())
     } 
+
+    // pub async fn update_stateless<T>(&self, data: &[T]) -> Result<(), mongodb::error::Error> where T: PPPData {
+    //     self._ensure_status().await;
+    //     for d in data {
+    //         self.db
+    //             .collection::<T>(T::COLLECTION)
+    //             .replace_one(doc!{T::ID_KEY: d.id}, d)
+    //             .upsert(true)
+    //             .await?;
+    //     }
+    //     Ok(())
+    // }
 }
 
 fn get_client() -> Result<Database , Box<dyn std::error::Error>> {

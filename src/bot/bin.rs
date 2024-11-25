@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use log::{debug, error, info, trace};
 use regex::Regex;
-use teloxide::{prelude::Requester, repls::CommandReplExt, types::{ChatId, Message, ParseMode, User}, utils::{command::BotCommands, markdown}, Bot};
+use teloxide::{prelude::Requester, repls::CommandReplExt, types::{ChatId, Message, ParseMode, User, UserId}, utils::{command::BotCommands, markdown}, Bot};
 use teloxide::payloads::SendMessageSetters;
 use power_pizza_bot::{bot::strings::HELP_MESSAGE, config::CONFIG};
 use power_pizza_bot::{bot::{BotError, BotUser}, db::DB};
@@ -36,6 +36,24 @@ enum Command {
     SearchAdvanced(String),
     #[command(rename = "sae", aliases = ["searchAdvancedEpisode", "cercaAvanzatoEpisodio", "cae"])]
     SearchAdvancedEpisode(String),
+    #[command(rename = "beta")]
+    Beta,
+    #[command(rename = "betalist")]
+    BetaList,
+    #[command(rename = "betawaitlist")]
+    BetaWaitList,
+    #[command(rename = "betaaccept")]
+    BetaAccept(String),
+}
+
+impl Command {
+    fn admin_access(&self) -> bool {
+        matches!(self, Self::BetaList | Self::BetaWaitList | Self::BetaAccept(..))
+    }
+
+    fn unrestricted(&self) -> bool {
+        matches!(self, Self::Beta | Self::BetaList | Self::BetaWaitList | Self::BetaAccept(..))
+    }
 }
 
 async fn reply(bot: Bot, msg: Message, cmd: Command) -> Result<(), teloxide::RequestError> {
@@ -70,9 +88,6 @@ fn split_quoted_args(s: &str) -> Option<Vec<String>> {
     let mut args = vec![];
     let r = Regex::new(r#"("([^"]+)"|(\S+)")|(\S+)"#).unwrap();
     for cap in r.captures_iter(s) {
-        debug!("query capture cap2 {:?}", cap.get(2));
-        debug!("query capture cap4 {:?}", cap.get(4));
-        debug!("query capture cap2 or cap4 {:?}", cap.get(2).or(cap.get(4)));
         let cap = match cap.get(2).or(cap.get(4)) {
             Some(c) => c,
             None => return None,
@@ -84,19 +99,27 @@ fn split_quoted_args(s: &str) -> Option<Vec<String>> {
 
 static MAX_RESULTS: usize = 50;
 
+fn is_admin(u: &Option<User>) -> bool {
+    if let Some(u) = u {
+        u.username.as_ref().is_some_and(|u| *u == CONFIG.tg.admin)
+    } else {
+        false
+    }
+}
+
 async fn reply_inner(bot: &Bot, msg: &Message, cmd: Command) -> Result<(), BotError> {
     let t = Instant::now();
-    if let Some(u) = msg.from.clone() {
-        if u.username.clone().is_some_and(|v| v != "topongo") {
-            match DB.update_one_stateless(u.id.0 as i64, BotUser::from(u)).await {
-                Ok(_) => bot.send_message(msg.chat.id, "Ciao, mi dispiace ma il bot è attualmente in sviluppo. Grazie per l'interesse. Riceverai una notifica quando sarà pronto.").await?,
-                Err(e) => {
-                    error!("Failed to update user: {:?}", e);
-                    bot.send_message(msg.chat.id, "C'è stato un errore nel processare la tua richiesta").await?
-                }
-            };
-            return Ok(());
+    if !cmd.unrestricted() {
+        if let Some(u) = msg.from.clone() {
+            if !DB.whitelisted(u.id.0 as i64).await? {
+                bot.send_message(msg.chat.id, "Ciao, mi dispiace ma il bot è attualmente in sviluppo. Grazie per l'interesse. Riceverai una notifica quando sarà pronto. Utilizza il comando /beta per richiedere ingresso in waitlist.").await?;
+                return Ok(());
+            }
         }
+    }
+    if cmd.admin_access() && !is_admin(&msg.from) {
+        bot.send_message(msg.chat.id, "Non sei autorizzato a fare questa richiesta").await?;
+        return Ok(());
     }
     match cmd {
         Command::Help => {
@@ -188,8 +211,55 @@ async fn reply_inner(bot: &Bot, msg: &Message, cmd: Command) -> Result<(), BotEr
                         .collect::<Vec<_>>()
                         .join("\n\n")
                 );
-                paginate_response(&bot, msg.chat.id, response).await?;
+                paginate_response(bot, msg.chat.id, response).await?;
             } 
+        }
+        Command::Beta => {
+            info!("user {} requested beta access", represent_user(&msg.from));
+            match &msg.from {
+                Some(u) => {
+                    match DB.get::<BotUser>(u.id.0 as i64).await? {
+                        Some(mut user) => {
+                            if user.beta {
+                                bot.send_message(msg.chat.id, "Hai già accesso alla beta!").await?;
+                            } else if user.waitlist {
+                                bot.send_message(msg.chat.id, "Hai già inviato una richiesta!").await?;
+                            } else {
+                                user.waitlist = true;
+                                DB.update_one_stateless(user.id, user).await?;
+                                bot.send_message(msg.chat.id, "Richiesta di entrare in beta inviata").await?;
+                            }
+                        }
+                        None => {
+                            let mut user = BotUser::from(u);
+                            user.waitlist = true;
+                            DB.update_one_stateless(user.id, user).await?;
+                            bot.send_message(msg.chat.id, "Richiesta di entrare in beta inviata").await?;
+                        }
+                    }
+                }
+                None => {
+                    bot.send_message(msg.chat.id, "C'è stato un errore nel processare la tua richiesta").await?;
+                }
+            }
+        }
+        Command::BetaWaitList | Command::BetaList => {
+            let list = if matches!(cmd, Command::BetaWaitList) {
+                DB.waitlist().await?
+            } else {
+                DB.beta_list().await?
+            };
+
+            bot.send_message(msg.chat.id, format!("List ({}):\n{}", list.len(), list.iter().map(|u| u.identify()).collect::<Vec<String>>().join("\n"))).await?;
+        }
+        Command::BetaAccept(query) => { 
+            let id = query.parse::<i64>().map_err(|_| BotError::MalformedQuery)?;
+            let mut user = DB.get::<BotUser>(id).await?.ok_or(BotError::MalformedQuery)?;
+            user.beta = true;
+            let id = user.id;
+            DB.update_one_stateless(id, user).await?;
+            bot.send_message(UserId(id as u64), "Richiesta di entrare in beta accettata!").await?;
+            bot.send_message(msg.chat.id, format!("User {} accepted into beta", id)).await?;
         }
     };
     trace!("replied in {:?}", t.elapsed());

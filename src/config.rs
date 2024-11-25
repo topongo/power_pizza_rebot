@@ -47,6 +47,7 @@ impl Default for DbConfig {
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct TgConfig {
     pub token: String,
+    pub admin: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
