@@ -1,6 +1,6 @@
 use std::{collections::HashSet, fs::{read_dir, read_to_string}, sync::Arc};
 
-use log::{info, warn, error};
+use log::{debug, error, info, warn};
 use power_pizza_bot::{config::CONFIG, db::DB, import::import_database, spreaker::Episode, transcript::{EpisodeTranscript, JobManager, Transcript}};
 
 #[tokio::main]
@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let transcripts: HashSet<u32> = DB.get_ids::<EpisodeTranscript>().await?.into_iter().collect();
 
     // collect cached transcripts
-    let cached_transcripts: HashSet<u32> = read_dir("output")
+    let cached_transcripts: HashSet<u32> = read_dir(CONFIG.import.transcript_dir.clone())
         .unwrap()
         .filter_map(|entry| {
             let entry = entry.unwrap();
@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let t = serde_json::from_str::<Transcript>(&read_to_string(format!("{}/{}.json", CONFIG.import.transcript_dir, e)).unwrap()).unwrap();
                 to_convert.push((e, t));
             } else {
-                info!("no cached transcript found for {}: add to transcript list", e);
+                debug!("no cached transcript found for {}: add to transcript list", e);
                 to_transcribe.push(e);
             }
         }
@@ -83,11 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         converter.run_transcribe(e);
     }
 
-    let transcripts = converter.wait().await?;
-
-    if !transcripts.is_empty() {
-        DB.insert_stateless(&transcripts).await.unwrap();
-    }
+    converter.wait().await?;
 
     Ok(())
 }

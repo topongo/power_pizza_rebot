@@ -22,9 +22,11 @@ pub struct JobManager {
     conv_sem: Arc<Semaphore>,
     tran_sem: Arc<Semaphore>,
     down_sem: Arc<Semaphore>,
+    insd_sem: Arc<Semaphore>,
     conv_jobs: JobContainer<EpisodeTranscript>,
     tran_jobs: JobContainer<(u32, Transcript)>,
     down_jobs: JobContainer<u32>,
+    insd_jobs: JobContainer<()>,
 }
 
 impl JobManager {
@@ -34,9 +36,11 @@ impl JobManager {
             conv_sem: Arc::new(Semaphore::new(MAX_CONVERT_JOBS)),
             tran_sem: Arc::new(Semaphore::new(MAX_TRANSCRIBE_JOBS)),
             down_sem: Arc::new(Semaphore::new(MAX_DOWNLOAD_JOBS)),
+            insd_sem: Arc::new(Semaphore::new(MAX_INSERT_DB_JOBS)),
             conv_jobs: Mutex::new(vec![]),
             tran_jobs: Mutex::new(vec![]),
             down_jobs: Mutex::new(vec![]),
+            insd_jobs: Mutex::new(vec![]),
         }
     }
 
@@ -95,7 +99,9 @@ impl JobManager {
             }
         };
         let t: Transcript = t.into();
-        let cache = std::fs::File::create(format!("{}/{}.json", CONFIG.import.transcript_dir, id))?;
+        let cache_f = format!("{}/{}.json", CONFIG.import.transcript_dir, id);
+        debug!("writing transcript cache: {}", cache_f);
+        let cache = std::fs::File::create(cache_f)?;
         serde_json::to_writer(cache, &t)?;
         drop(_permit);
         Ok((id, t))
@@ -108,7 +114,9 @@ impl JobManager {
         let url = e.download_url;
         let res = cli.get(&url).send().await?;
         let mp3 = format!("{}/{}.mp3", CONFIG.import.download_dir, e.id);
+        debug!("download output: {}", mp3);
         let wav = format!("{}/{}.wav", CONFIG.import.wav_dir, e.id);
+        debug!("wav output: {}", wav);
         if res.status().is_success() {
             let mut file = std::fs::File::create(&mp3)?;
             let mut stream =  res.bytes_stream();
@@ -132,7 +140,15 @@ impl JobManager {
         Ok(id)
     }
 
-    pub async fn wait(self) -> Result<Vec<EpisodeTranscript>, JobManagerError> {
+    async fn _run_insert_db(e: EpisodeTranscript, sem: Arc<Semaphore>) -> Result<(), JobManagerError> {
+        let _permit = sem.acquire().await.unwrap();
+        info!("inserting episode {} into database", e.episode_id);
+        DB.insert_stateless(&[e]).await?;
+        drop(_permit);
+        Ok(())
+    }
+
+    pub async fn wait(self) -> Result<(), JobManagerError> {
         for j in self.down_jobs.into_inner().unwrap().into_iter() {
             let id = j.await??;
             let job = Self::_run_transcribe(id, self.cli.clone(), self.tran_sem.clone());
@@ -145,17 +161,24 @@ impl JobManager {
             self.conv_jobs.lock()?.push(tokio::spawn(job));
         }
 
-        let mut out = vec![];
         for j in self.conv_jobs.into_inner().unwrap().into_iter() {
-            out.push(j.await??)
+            let e = j.await??;
+            let job = Self::_run_insert_db(e, self.insd_sem.clone());
+            self.insd_jobs.lock()?.push(tokio::spawn(job));
         }
-        Ok(out)
+
+        for j in self.insd_jobs.into_inner().unwrap().into_iter() {
+            j.await??;
+        }
+
+        Ok(())
     }
 }
 
 static MAX_CONVERT_JOBS: usize = 4;
 static MAX_TRANSCRIBE_JOBS: usize = 1;
 static MAX_DOWNLOAD_JOBS: usize = 4;
+static MAX_INSERT_DB_JOBS: usize = 4;
 
 #[derive(Debug)]
 pub enum JobManagerError {

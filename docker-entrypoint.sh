@@ -1,7 +1,7 @@
 #!/bin/bash
 
 MODEL_KIND=ggml
-MODEL=large-v3-turbo.bin
+MODEL=large-v3-turbo
 
 if [ ! -f /app/models_ext/$MODEL_KIND-$MODEL ]; then
     echo "Model not found: $MODEL_KIND-$MODEL"
@@ -14,5 +14,5 @@ if [ ! -f /app/models_ext/$MODEL_KIND-$MODEL ]; then
     fi
 fi
 
-docker compose run --rm -it --entrypoint /app/server -p 8080:8080 transcribe -m models_ext/ggml-large-v3-turbo.bin --host 0.0.0.0 -pc -pr -l it -debug
+/app/server -m models_ext/ggml-large-v3-turbo.bin --host 0.0.0.0 -pc -pr -l it -debug
 

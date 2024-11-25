@@ -9,9 +9,9 @@ services:
               count: 1
               capabilities: [gpu]
     volumes:
-      - ./audio:/app/input
       - ./models_ext:/app/models_ext
-      - ./output:/app/output
+    ports:
+      - 8080:8080
 
   db:
     image: mongo
