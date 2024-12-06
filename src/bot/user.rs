@@ -36,9 +36,13 @@ impl From<&teloxide::types::User> for BotUser {
 
 impl BotUser {
     pub fn identify(&self) -> String {
+        format!("{} ({})", self.user_or_name(), self.id)
+    }
+
+    pub fn user_or_name(&self) -> String {
         match self.username {
-            Some(ref u) => format!("@{} ({})", u, self.id),
-            None => format!("{} ({})", self.first_name, self.id),
+            Some(ref u) => format!("@{}", u),
+            None => self.first_name.clone(),
         }
     }
 }

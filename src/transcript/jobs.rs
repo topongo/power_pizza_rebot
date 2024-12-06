@@ -5,6 +5,7 @@ use log::debug;
 #[allow(unused_imports)]
 use log::{error, info, warn};
 use futures_util::stream::StreamExt;
+use reqwest::{RequestBuilder, Url};
 
 use crate::config::CONFIG;
 use crate::db::DB;
@@ -80,7 +81,7 @@ impl JobManager {
         info!("transcribing espisode {}", id);
         let t = loop {
             match cli
-                .post("http://127.0.0.1:8080/inference")
+                .post(CONFIG.import.transcriber_url.as_str())
                 .multipart(reqwest::multipart::Form::new()
                     .text("temperature", "0.0")
                     .text("temperature_inc", "0.0")

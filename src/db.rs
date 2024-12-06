@@ -123,7 +123,7 @@ impl PPPDatabase {
         Ok(())
     }
 
-    pub async fn update_one_stateless<T>(&self, id: T::IdType, data: T) -> Result<(), mongodb::error::Error> where T: PPPData, <T as PPPData>::IdType: Into<Bson> {
+    pub async fn update_one_stateless<T>(&self, id: T::IdType, data: &T) -> Result<(), mongodb::error::Error> where T: PPPData, <T as PPPData>::IdType: Into<Bson> {
         self._ensure_status().await;
         self.db
             .collection::<T>(T::COLLECTION)
@@ -133,7 +133,7 @@ impl PPPDatabase {
         Ok(())
     }
 
-    pub async fn update_one_stateful<T>(&self, id: T::IdType, data: T) -> Result<(), mongodb::error::Error> where T: PPPData, <T as PPPData>::IdType: Into<Bson> {
+    pub async fn update_one_stateful<T>(&self, id: T::IdType, data: &T) -> Result<(), mongodb::error::Error> where T: PPPData, <T as PPPData>::IdType: Into<Bson> {
         self._ensure_status().await;
         self.update_one_stateless(id, data).await?;
         self._update_status().await;

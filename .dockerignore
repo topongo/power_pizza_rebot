@@ -1,7 +1,5 @@
-target
 Dockerfile
 .dockerignore
-Cargo.lock
 docker-compose.yaml
 whisper.cpp
 .git

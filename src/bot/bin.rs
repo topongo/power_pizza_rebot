@@ -237,19 +237,23 @@ async fn reply_inner(bot: &Bot, msg: &Message, cmd: Command) -> Result<(), BotEr
                     match DB.get::<BotUser>(u.id.0 as i64).await? {
                         Some(mut user) => {
                             if user.beta {
+                                info!("user {} already has beta access", user.identify());
                                 bot.send_message(msg.chat.id, "Hai già accesso alla beta!").await?;
                             } else if user.waitlist {
+                                info!("user {} already requested beta access", user.identify());
                                 bot.send_message(msg.chat.id, "Hai già inviato una richiesta!").await?;
                             } else {
                                 user.waitlist = true;
-                                DB.update_one_stateless(user.id, user).await?;
+                                info!("inserting user {} into waitlist", user.identify());
+                                DB.update_one_stateless(user.id, &user).await?;
                                 bot.send_message(msg.chat.id, "Richiesta di entrare in beta inviata").await?;
                             }
                         }
                         None => {
                             let mut user = BotUser::from(u);
                             user.waitlist = true;
-                            DB.update_one_stateless(user.id, user).await?;
+                            info!("inserting user {} into waitlist", user.identify());
+                            DB.update_one_stateless(user.id, &user).await?;
                             bot.send_message(msg.chat.id, "Richiesta di entrare in beta inviata").await?;
                         }
                     }
@@ -266,16 +270,33 @@ async fn reply_inner(bot: &Bot, msg: &Message, cmd: Command) -> Result<(), BotEr
                 DB.beta_list().await?
             };
 
-            bot.send_message(msg.chat.id, format!("List ({}):\n{}", list.len(), list.iter().map(|u| u.identify()).collect::<Vec<String>>().join("\n"))).await?;
+            bot.send_message(msg.chat.id, format!(
+                "{}\n{}", 
+                markdown::escape(&format!("{} ({}):", cmd, list.len())),
+                list.iter().map(|u| format!(
+                    "{} \\({}\\)",
+                    u.user_or_name(),
+                    markdown::link(&format!(
+                        "tg://bot_command?command=betaaccept {}",
+                        u.id
+                    ), &u.id.to_string())
+                )).collect::<Vec<String>>().join("\n")
+            )).await?;
         }
         Command::BetaAccept(query) => { 
             let id = query.parse::<i64>().map_err(|_| BotError::MalformedQuery)?;
             let mut user = DB.get::<BotUser>(id).await?.ok_or(BotError::MalformedQuery)?;
-            user.beta = true;
-            let id = user.id;
-            DB.update_one_stateless(id, user).await?;
-            bot.send_message(UserId(id as u64), "Richiesta di entrare in beta accettata!").await?;
-            bot.send_message(msg.chat.id, format!("User {} accepted into beta", id)).await?;
+            if user.beta {
+                bot.send_message(msg.chat.id, "User already in beta").await?;
+                return Ok(());
+            } else {
+                user.beta = true;
+                let id = user.id;
+                DB.update_one_stateless(id, &user).await?;
+                info!("sending beta accepted to user {}", user.identify());
+                bot.send_message(UserId(id as u64), "Richiesta di entrare in beta accettata!").await?;
+                bot.send_message(msg.chat.id, format!("User {} accepted into beta", id)).await?;
+            }
         }
     };
     trace!("replied in {:?}", t.elapsed());

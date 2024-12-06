@@ -56,8 +56,7 @@ pub struct ImportConfig {
     pub download_dir: String,
     pub wav_dir: String,
     pub transcript_dir: String,
-    pub transcriber_host: String,
-    pub transcriber_port: u16,
+    pub transcriber_url: String,
 }
 
 impl Default for ImportConfig {
@@ -67,8 +66,7 @@ impl Default for ImportConfig {
             download_dir: "audio/mp3".to_owned(),
             wav_dir: "audio/wav".to_owned(),
             transcript_dir: "transcripts".to_owned(),
-            transcriber_port: 8080,
-            transcriber_host: "localhost".to_owned(),
+            transcriber_url: "http://localhost:8080/inference".to_owned(),
         }
     }
 }
